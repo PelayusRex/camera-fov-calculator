@@ -4,15 +4,22 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-# --- 1. CONFIGURACIÓN DE PÁGINA (WIDE MODE) ---
+# --- 1. CONFIGURACIÓN ---
 st.set_page_config(
-    page_title="Calculadora Interceptor Pro", 
+    page_title="Calculadora Interceptor Compacta", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# --- 2. GESTIÓN DE MEMORIA (SESSION STATE) ---
-# Aquí guardamos las cámaras para que no se borren
+# Estilo CSS para ajustar márgenes y que se vea más compacto
+st.markdown("""
+    <style>
+        .block-container {padding-top: 1rem; padding-bottom: 0rem;}
+        h1 {margin-bottom: 0rem;}
+    </style>
+""", unsafe_allow_html=True)
+
+# --- 2. GESTIÓN DE MEMORIA ---
 if 'camaras_db' not in st.session_state:
     st.session_state['camaras_db'] = {
         "Arducam IMX519 (Stock)": {"w": 5.6, "h": 4.2, "f": 4.28, "r": 4656},
@@ -21,128 +28,127 @@ if 'camaras_db' not in st.session_state:
         "Fisheye Genérica (1.8mm)":{"w": 5.6, "h": 4.2, "f": 1.8, "r": 2000}
     }
 
-st.title("🚁 Calculadora Óptica: Dron Interceptor (v3.0)")
-st.markdown("---")
-
-# --- 3. BARRA LATERAL: GESTIÓN DE CÁMARAS ---
+# --- 3. BARRA LATERAL ---
 with st.sidebar:
-    st.header("📷 Selección de Cámara")
+    st.title("🚁 Configuración")
     
-    # Selector de cámara basado en la "Base de Datos"
-    nombre_camara = st.selectbox("Cargar Preset", list(st.session_state['camaras_db'].keys()))
-    
-    # Cargar datos de la selección
+    # Selector de Cámara
+    st.subheader("📷 Cámara")
+    nombre_camara = st.selectbox("Preset", list(st.session_state['camaras_db'].keys()))
     datos_cam = st.session_state['camaras_db'][nombre_camara]
-
-    st.subheader("⚙️ Configuración Actual")
-    st.info("Puedes editar estos valores y guardarlos como una cámara nueva abajo.")
     
+    # Edición compacta (Columns dentro del sidebar)
     c1, c2 = st.columns(2)
     with c1:
-        sensor_w = st.number_input("Ancho Sensor (mm)", value=float(datos_cam['w']), format="%.2f")
+        sensor_w = st.number_input("Ancho (mm)", value=float(datos_cam['w']), format="%.2f")
         focal = st.number_input("Focal (mm)", value=float(datos_cam['f']), format="%.2f")
     with c2:
-        sensor_h = st.number_input("Alto Sensor (mm)", value=float(datos_cam['h']), format="%.2f")
-        res_px = st.number_input("Resolución (px)", value=int(datos_cam['r']))
+        sensor_h = st.number_input("Alto (mm)", value=float(datos_cam['h']), format="%.2f")
+        res_px = st.number_input("Resolución", value=int(datos_cam['r']))
 
-    # --- ZONA DE GUARDADO ---
-    with st.expander("💾 Guardar como Nueva Cámara"):
-        nuevo_nombre = st.text_input("Nombre del Modelo", placeholder="Ej: Sony IMX con Lente Zoom")
-        if st.button("Guardar en Lista"):
-            if nuevo_nombre:
-                st.session_state['camaras_db'][nuevo_nombre] = {
-                    "w": sensor_w, "h": sensor_h, "f": focal, "r": res_px
-                }
-                st.success(f"¡{nuevo_nombre} guardada!")
-                st.rerun() # Recarga la página para actualizar la lista
-            else:
-                st.error("Escribe un nombre primero.")
+    # Guardar nueva
+    with st.expander("💾 Guardar Nueva"):
+        new_name = st.text_input("Nombre")
+        if st.button("Guardar"):
+            if new_name:
+                st.session_state['camaras_db'][new_name] = {"w": sensor_w, "h": sensor_h, "f": focal, "r": res_px}
+                st.rerun()
 
     st.markdown("---")
-    st.header("✈️ Escenario de Vuelo")
-    pitch = st.slider("Pitch (Inclinación) [º]", 0, 60, 30)
-    dist = st.slider("Distancia Horizontal (m)", 5, 200, 50)
-    altura_rel = st.slider("Altura Relativa (m)", -50, 50, 0, help="Positivo = Objetivo más alto que tú")
+    
+    # Vuelo
+    st.subheader("✈️ Vuelo")
+    pitch = st.slider("Pitch [º]", 0, 60, 30)
+    dist = st.slider("Distancia [m]", 5, 200, 50)
+    altura_rel = st.slider("Altura Rel. [m]", -50, 50, 0)
     obj_size = st.number_input("Tamaño Objetivo (m)", value=0.3)
 
 # --- 4. CÁLCULOS ---
 hfov = 2 * math.degrees(math.atan(sensor_w / (2 * focal)))
 vfov = 2 * math.degrees(math.atan(sensor_h / (2 * focal)))
 
-# Geometría
-angulo_a_objetivo_rad = math.atan2(altura_rel, dist)
-angulo_a_objetivo_deg = math.degrees(angulo_a_objetivo_rad)
+ang_obj_rad = math.atan2(altura_rel, dist)
+ang_obj_deg = math.degrees(ang_obj_rad)
 techo_visual = -pitch + (vfov / 2)
 suelo_visual = -pitch - (vfov / 2)
-visible = suelo_visual <= angulo_a_objetivo_deg <= techo_visual
+visible = suelo_visual <= ang_obj_deg <= techo_visual
 
-distancia_real = math.sqrt(dist**2 + altura_rel**2)
-px_on_target = (res_px * obj_size * focal) / (sensor_w * distancia_real)
+dist_real = math.sqrt(dist**2 + altura_rel**2)
+px_target = (res_px * obj_size * focal) / (sensor_w * dist_real)
 
-# --- 5. VISUALIZACIÓN PRINCIPAL ---
+# --- 5. INTERFAZ PRINCIPAL (LAYOUT 2 COLUMNAS) ---
 
-# Métricas en columnas grandes
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("FOV Vertical", f"{vfov:.1f}º")
-col2.metric("Ángulo Objetivo", f"{angulo_a_objetivo_deg:.1f}º")
-col3.metric("Límite Superior", f"{techo_visual:.1f}º", delta_color="off")
-col4.metric("Píxeles Objetivo", f"{px_on_target:.1f} px", 
-            delta="Detectado" if px_on_target > 15 else "Crítico",
-            delta_color="normal" if px_on_target > 15 else "inverse")
+st.subheader("Análisis de Interceptación")
 
-# Mensaje de estado
-if not visible:
-    if angulo_a_objetivo_deg > techo_visual:
-        st.error(f"🚨 **PÉRDIDA DE OBJETIVO POR ARRIBA:** Necesitas subir la cámara o reducir el Pitch.")
+# CREAMOS DOS COLUMNAS: Izquierda (Datos) - Derecha (Gráfico)
+# [1, 3] significa que la columna derecha es 3 veces más ancha que la izquierda
+col_datos, col_grafico = st.columns([1, 3]) 
+
+# --- COLUMNA IZQUIERDA: LOS DATOS ---
+with col_datos:
+    st.markdown("### 📊 Datos")
+    
+    # Usamos un container para agrupar visualmente
+    with st.container(border=True):
+        st.metric("FOV Vertical", f"{vfov:.1f}º")
+        st.metric("Ángulo Objetivo", f"{ang_obj_deg:.1f}º")
+        st.divider()
+        st.metric("Píxeles Objetivo", f"{px_target:.1f} px", 
+                 delta="Visible" if px_target > 15 else "Borroso",
+                 delta_color="normal" if px_target > 15 else "inverse")
+    
+    # Alerta visual compacta
+    if visible:
+        st.success("✅ **VISIBLE**")
     else:
-        st.error(f"🚨 **PÉRDIDA DE OBJETIVO POR ABAJO:** El objetivo está demasiado bajo.")
-else:
-    st.success("✅ **OBJETIVO DENTRO DEL CAMPO DE VISIÓN**")
+        st.error("🚨 **PERDIDO**")
+        if ang_obj_deg > techo_visual:
+            st.caption(f"El objetivo está {ang_obj_deg - techo_visual:.1f}º por encima de tu cámara.")
 
-# --- GRÁFICO RESPONSIVE ---
-# Usamos un estilo oscuro para que quede más 'tech'
-plt.style.use('dark_background')
+# --- COLUMNA DERECHA: EL GRÁFICO ---
+with col_grafico:
+    # Ajustamos figsize para que sea "Panorámico" (10 de ancho, 4.5 de alto)
+    # Esto evita que se coma toda la altura de la pantalla
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 4.5)) 
+    fig.patch.set_facecolor('#0E1117')
+    ax.set_facecolor('#0E1117')
 
-fig, ax = plt.subplots(figsize=(12, 6)) # Tamaño base, Streamlit lo estirará
-fig.patch.set_facecolor('#0E1117') # Color de fondo igual al de Streamlit
-ax.set_facecolor('#0E1117')
+    # Dron
+    ax.plot(0, 0, marker='o', color='white', markersize=8)
 
-# Dron
-ax.plot(0, 0, marker='o', color='white', markersize=10, label="Interceptor")
+    # Cono FOV
+    radio = dist_real * 1.15
+    ang_t, ang_b = math.radians(techo_visual), math.radians(suelo_visual)
+    xt, yt = radio * math.cos(ang_t), radio * math.sin(ang_t)
+    xb, yb = radio * math.cos(ang_b), radio * math.sin(ang_b)
 
-# Cono FOV
-radio = distancia_real * 1.2
-ang_top = math.radians(techo_visual)
-ang_bot = math.radians(suelo_visual)
-x_t, y_t = radio * math.cos(ang_top), radio * math.sin(ang_top)
-x_b, y_b = radio * math.cos(ang_bot), radio * math.sin(ang_bot)
+    poly = patches.Polygon([[0,0], [xt, yt], [xb, yb]], 
+                           closed=True, color='#00FF00' if visible else '#FF4B4B', alpha=0.2)
+    ax.add_patch(poly)
+    ax.plot([0, xt], [0, yt], color='white', linestyle='--', alpha=0.5, linewidth=0.8)
+    ax.plot([0, xb], [0, yb], color='white', linestyle='--', alpha=0.5, linewidth=0.8)
 
-poly = patches.Polygon([[0,0], [x_t, y_t], [x_b, y_b]], 
-                       closed=True, color='#00FF00' if visible else '#FF4B4B', alpha=0.2)
-ax.add_patch(poly)
-ax.plot([0, x_t], [0, y_t], color='#00FF00' if visible else '#FF4B4B', linestyle='--', linewidth=1)
-ax.plot([0, x_b], [0, y_b], color='#00FF00' if visible else '#FF4B4B', linestyle='--', linewidth=1)
+    # Objetivo
+    ax.plot(dist, altura_rel, marker='*', color='#00FFFF', markersize=15)
+    ax.plot([0, dist], [0, altura_rel], color='white', linestyle=':', alpha=0.2)
 
-# Objetivo
-ax.plot(dist, altura_rel, marker='*', color='#00FFFF', markersize=20, label="Objetivo")
-ax.plot([0, dist], [0, altura_rel], color='white', linestyle=':', alpha=0.3)
+    # Decoración
+    ax.grid(True, color='gray', linestyle=':', alpha=0.2)
+    ax.set_xlabel("Distancia (m)", color='gray', fontsize=8)
+    ax.set_ylabel("Altura (m)", color='gray', fontsize=8)
+    
+    # Limpiar bordes
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['bottom'].set_color('gray')
+    ax.spines['left'].set_color('gray')
+    ax.tick_params(colors='gray', labelsize=8)
 
-# Grid y Ejes
-ax.grid(True, color='gray', linestyle=':', alpha=0.2)
-ax.set_xlabel("Distancia (m)", color='white')
-ax.set_ylabel("Altura (m)", color='white')
-ax.spines['bottom'].set_color('white')
-ax.spines['left'].set_color('white')
-ax.spines['top'].set_visible(False)
-ax.spines['right'].set_visible(False)
-ax.tick_params(axis='x', colors='white')
-ax.tick_params(axis='y', colors='white')
+    # Zoom inteligente
+    max_y = max(abs(altura_rel), abs(yt), abs(yb)) * 1.2
+    ax.set_ylim(-max_y, max_y)
+    ax.set_xlim(-2, radio)
+    ax.set_aspect('equal') # Mantiene la proporción real para no engañar al ojo
 
-# Auto-zoom inteligente para que siempre se vea todo
-max_y = max(abs(altura_rel), abs(y_t), abs(y_b)) * 1.1
-ax.set_ylim(-max_y, max_y)
-ax.set_xlim(-5, radio)
-ax.set_aspect('equal')
-
-# ESTO ES LO QUE ARREGLA EL TAMAÑO DE VENTANA
-st.pyplot(fig, use_container_width=True)
+    st.pyplot(fig, use_container_width=True)
