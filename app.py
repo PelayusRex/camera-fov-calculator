@@ -4,110 +4,132 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import numpy as np
 
-# --- CONFIGURACIÓN ---
-st.set_page_config(page_title="Calculadora Interceptor", layout="wide")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Calculadora Interceptor v2", layout="wide")
 
-# Gestión de memoria para guardar cámaras
-if 'camaras_db' not in st.session_state:
-    st.session_state['camaras_db'] = {
-        "Arducam IMX519 (Stock)": {"w": 5.6, "h": 4.2, "f": 4.28, "r": 4656},
-        "RPi HQ (Lente 6mm)":     {"w": 6.17, "h": 4.55, "f": 6.0, "r": 4056},
-        "GoPro Hero (Wide)":      {"w": 6.17, "h": 4.55, "f": 2.5, "r": 4000},
-    }
+st.title("🚁 Calculadora Óptica 3D: Dron Interceptor")
+st.markdown("Simulación de visibilidad considerando Pitch del dron y diferencia de altura con el objetivo.")
 
-# --- BARRA LATERAL ---
-st.sidebar.header("1. Configuración de Cámara")
-nombre_camara = st.sidebar.selectbox("Cargar Preset", list(st.session_state['camaras_db'].keys()))
-datos_cam = st.session_state['camaras_db'][nombre_camara]
+# --- BARRA LATERAL (INPUTS) ---
+st.sidebar.header("1. Cámara y Sensor")
+cam_option = st.sidebar.selectbox("Modelo de Cámara", 
+    ["Arducam IMX519 (Actual)", "RPi HQ (Wide)", "GoPro Hero", "Personalizada"])
+
+if cam_option == "Arducam IMX519 (Actual)":
+    w_def, h_def, f_def, res_def = 5.6, 4.2, 4.28, 4656
+elif cam_option == "RPi HQ (Wide)":
+    w_def, h_def, f_def, res_def = 6.17, 4.55, 6.0, 4056
+elif cam_option == "GoPro Hero":
+    w_def, h_def, f_def, res_def = 6.17, 4.55, 2.5, 4000
+else:
+    w_def, h_def, f_def, res_def = 5.0, 4.0, 4.0, 3000
 
 c1, c2 = st.sidebar.columns(2)
 with c1:
-    sensor_w = st.number_input("Ancho (mm)", value=float(datos_cam['w']), format="%.2f")
-    focal = st.number_input("Focal (mm)", value=float(datos_cam['f']), format="%.2f")
+    sensor_w = st.number_input("Ancho Sensor (mm)", value=w_def, format="%.2f")
+    focal = st.number_input("Focal (mm)", value=f_def, format="%.2f")
 with c2:
-    sensor_h = st.number_input("Alto (mm)", value=float(datos_cam['h']), format="%.2f")
-    res_px = st.number_input("Resolución (px)", value=int(datos_cam['r']))
+    sensor_h = st.number_input("Alto Sensor (mm)", value=h_def, format="%.2f")
+    res_px = st.number_input("Resolución (px)", value=res_def)
 
-# Guardar nueva cámara
-with st.sidebar.expander("💾 Guardar Preset Nuevo"):
-    new_name = st.text_input("Nombre Modelo")
-    if st.button("Guardar"):
-        if new_name:
-            st.session_state['camaras_db'][new_name] = {"w": sensor_w, "h": sensor_h, "f": focal, "r": res_px}
-            st.rerun()
+st.sidebar.header("2. Geometría del Encuentro")
+# Rango ampliado para distancias largas
+dist = st.sidebar.slider("Distancia Horizontal (m)", 5, 200, 50)
+# Nuevo slider de altura relativa (negativo = abajo, positivo = arriba)
+altura_rel = st.sidebar.slider("Altura Relativa Objetivo (m)", -50, 50, 0, help="Positivo: Enemigo por encima de ti. Negativo: Por debajo.")
 
-st.sidebar.header("2. Escenario de Vuelo")
-pitch = st.sidebar.slider("Pitch (Inclinación) [º]", 0, 60, 30)
-dist = st.sidebar.slider("Distancia [m]", 5, 200, 50)
-altura_rel = st.sidebar.slider("Altura Relativa [m]", -50, 50, 0)
+st.sidebar.header("3. Actitud del Dron")
+pitch = st.sidebar.slider("Pitch de Ataque (Nariz Abajo) [º]", 0, 60, 30)
 obj_size = st.sidebar.number_input("Tamaño Objetivo (m)", value=0.3)
 
-# --- CÁLCULOS ---
+# --- CÁLCULOS MATEMÁTICOS ---
+
+# 1. FOVs de la cámara
 hfov = 2 * math.degrees(math.atan(sensor_w / (2 * focal)))
 vfov = 2 * math.degrees(math.atan(sensor_h / (2 * focal)))
 
-ang_obj_rad = math.atan2(altura_rel, dist)
-ang_obj_deg = math.degrees(ang_obj_rad)
-techo_visual = -pitch + (vfov / 2)
-suelo_visual = -pitch - (vfov / 2)
-visible = suelo_visual <= ang_obj_deg <= techo_visual
+# 2. Ángulo geométrico hacia el objetivo (Elevación necesaria para mirarlo)
+# atan(Cateto Opuesto / Cateto Adyacente)
+angulo_a_objetivo_rad = math.atan2(altura_rel, dist)
+angulo_a_objetivo_deg = math.degrees(angulo_a_objetivo_rad)
 
-dist_real = math.sqrt(dist**2 + altura_rel**2)
-px_target = (res_px * obj_size * focal) / (sensor_w * dist_real)
+# 3. Límites de visión de la cámara (Considerando que el dron mira hacia abajo 'pitch' grados)
+# El centro de la cámara está en -pitch.
+techo_visual_absoluto = -pitch + (vfov / 2)
+suelo_visual_absoluto = -pitch - (vfov / 2)
 
-# --- INTERFAZ PRINCIPAL ---
+# 4. ¿Está dentro del cono?
+visible = suelo_visual_absoluto <= angulo_a_objetivo_deg <= techo_visual_absoluto
 
-st.title(f"🚁 Análisis: {nombre_camara}")
+# 5. Resolución (Hipotenusa real, no solo distancia X)
+distancia_real = math.sqrt(dist**2 + altura_rel**2)
+px_on_target = (res_px * obj_size * focal) / (sensor_w * distancia_real)
 
-# Métricas Claras
+# --- MOSTRAR MÉTRICAS ---
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("FOV Vertical", f"{vfov:.1f}º")
-m2.metric("Ángulo Objetivo", f"{ang_obj_deg:.1f}º")
-m3.metric("Límite Superior", f"{techo_visual:.1f}º")
-m4.metric("Píxeles Objetivo", f"{px_target:.1f} px", delta="OK" if px_target > 15 else "Bajo")
-
-# Mensaje de estado
-if not visible:
-    st.error(f"🚨 **OBJETIVO PERDIDO**: El enemigo está fuera del ángulo de visión.")
-else:
-    st.success(f"✅ **OBJETIVO VISIBLE**")
+m2.metric("Ángulo al Objetivo", f"{angulo_a_objetivo_deg:.1f}º", help="Ángulo real geométrico hacia el enemigo")
+m3.metric("Techo de Visión", f"{techo_visual_absoluto:.1f}º", help="Máximo ángulo hacia arriba que ve la cámara")
+m4.metric("Píxeles en Objetivo", f"{px_on_target:.1f} px", delta_color="normal" if px_on_target > 15 else "inverse")
 
 st.divider()
 
-# --- GRÁFICO CONTROLADO ---
-# 1. Definimos un tamaño fijo más ancho que alto (10x4 pulgadas)
-fig, ax = plt.subplots(figsize=(10, 4)) 
+# --- VISUALIZACIÓN GRÁFICA ---
+st.subheader(f"Simulación de Interceptación")
 
-# Dron y Objetivo
+if visible:
+    # Calculamos cuánto margen nos sobra
+    margen = techo_visual_absoluto - angulo_a_objetivo_deg
+    st.success(f"✅ **OBJETIVO VISIBLE** | Margen de seguridad superior: {margen:.1f}º")
+else:
+    if angulo_a_objetivo_deg > techo_visual_absoluto:
+        st.error(f"🚨 **PÉRDIDA SUPERIOR:** El objetivo está demasiado ALTO ({angulo_a_objetivo_deg:.1f}º) para tu inclinación actual.")
+    else:
+        st.error(f"🚨 **PÉRDIDA INFERIOR:** El objetivo está demasiado BAJO.")
+
+# Configuración del Plot
+fig, ax = plt.subplots(figsize=(12, 6))
+
+# 1. Dron en (0,0)
 ax.plot(0, 0, 'ko', markersize=8, label="Interceptor")
-ax.plot(dist, altura_rel, 'r*', markersize=15, label="Objetivo")
 
-# Cono
-radio = dist_real * 1.2
-ang_t, ang_b = math.radians(techo_visual), math.radians(suelo_visual)
-xt, yt = radio * math.cos(ang_t), radio * math.sin(ang_t)
-xb, yb = radio * math.cos(ang_b), radio * math.sin(ang_b)
+# 2. Cono de visión
+# Calculamos vectores para dibujar el triángulo
+radio_vis = distancia_real + 10 # Hacemos el cono un poco más largo que el objetivo
+ang_top_rad = math.radians(techo_visual_absoluto)
+ang_bot_rad = math.radians(suelo_visual_absoluto)
 
-poly = patches.Polygon([[0,0], [xt, yt], [xb, yb]], closed=True, color='green' if visible else 'red', alpha=0.2)
+x_top, y_top = radio_vis * math.cos(ang_top_rad), radio_vis * math.sin(ang_top_rad)
+x_bot, y_bot = radio_vis * math.cos(ang_bot_rad), radio_vis * math.sin(ang_bot_rad)
+
+# Dibujar zona visible
+color_cono = 'green' if visible else 'red'
+poly = patches.Polygon([[0,0], [x_top, y_top], [x_bot, y_bot]], 
+                       closed=True, color=color_cono, alpha=0.2, label="FOV Cámara")
 ax.add_patch(poly)
-ax.plot([0, xt], [0, yt], 'g--' if visible else 'r--', alpha=0.5)
-ax.plot([0, xb], [0, yb], 'g--' if visible else 'r--', alpha=0.5)
+ax.plot([0, x_top], [0, y_top], color=color_cono, linestyle='--')
+ax.plot([0, x_bot], [0, y_bot], color=color_cono, linestyle='--')
 
-# Decoración
+# 3. Objetivo
+ax.plot(dist, altura_rel, marker='*', color='blue', markersize=18, label="Objetivo")
+# Línea de visión ideal
+ax.plot([0, dist], [0, altura_rel], color='blue', linestyle=':', alpha=0.5)
+
+# 4. Referencias
+ax.hlines(0, -10, dist+20, colors='gray', linestyles='-', alpha=0.3, label="Nivel 0m")
+ax.axvline(0, color='gray', linestyle='-', alpha=0.1)
+
+# Estética
+ax.set_xlabel("Distancia Horizontal (m)")
+ax.set_ylabel("Altura Relativa (m)")
+ax.set_title(f"Vista Lateral (Side View) - Pitch: {pitch}º")
+ax.legend(loc='upper left')
 ax.grid(True, alpha=0.3)
-ax.set_xlabel("Distancia (m)")
-ax.set_ylabel("Altura (m)")
-ax.set_title(f"Vista Lateral (Pitch: {pitch}º)")
+ax.set_aspect('equal') # Importante para no deformar ángulos visualmente
 
-# Límites automáticos pero con margen
-max_val = max(abs(altura_rel), abs(yt), abs(yb), 10) * 1.2
-ax.set_ylim(-max_val, max_val)
-ax.set_xlim(-5, radio)
-ax.set_aspect('equal')
+# Ajustar límites dinámicamente
+max_y = max(abs(altura_rel), abs(y_top), abs(y_bot)) + 5
+ax.set_ylim(-max_y, max_y)
+ax.set_xlim(-5, dist + 15)
 
-# AQUÍ ESTÁ LA CLAVE DEL TAMAÑO:
-# use_container_width=False -> No estira el gráfico al ancho total de la pantalla.
-# Se quedará del tamaño que definimos en figsize (10x4).
-col_centrada, _ = st.columns([3, 1]) # Truco para centrarlo un poco pero sin llenar todo
-with col_centrada:
-    st.pyplot(fig, use_container_width=False)
+st.pyplot(fig)
